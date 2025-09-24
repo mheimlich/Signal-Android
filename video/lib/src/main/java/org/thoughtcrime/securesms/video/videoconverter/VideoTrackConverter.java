@@ -120,6 +120,7 @@ final class VideoTrackConverter {
         if (VERBOSE) Log.d(TAG, "video found codec: " + videoCodecInfo.getName());
 
         final MediaFormat inputVideoFormat = mVideoExtractor.getTrackFormat(videoInputTrack);
+        if (VERBOSE) Log.d(TAG, "input video format: " + inputVideoFormat);
 
         mInputDuration = inputVideoFormat.containsKey(MediaFormat.KEY_DURATION) ? inputVideoFormat.getLong(MediaFormat.KEY_DURATION) : 0;
 
@@ -164,10 +165,7 @@ final class VideoTrackConverter {
         outputVideoFormat.setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR);
         outputVideoFormat.setInteger(MediaFormat.KEY_FRAME_RATE, OUTPUT_VIDEO_FRAME_RATE);
         outputVideoFormat.setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, OUTPUT_VIDEO_IFRAME_INTERVAL);
-        if (Build.VERSION.SDK_INT >= 31 && isHdr(inputVideoFormat)) {
-            outputVideoFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
-        }
-        if (VERBOSE) Log.d(TAG, "video format: " + outputVideoFormat);
+        if (VERBOSE) Log.d(TAG, "output video format: " + outputVideoFormat);
 
         // Create a MediaCodec for the desired codec, then configure it as an encoder with
         // our desired properties. Request a Surface to use for input.
@@ -501,7 +499,15 @@ final class VideoTrackConverter {
             final @NonNull Surface surface) {
         final Pair<MediaCodec, MediaFormat> decoderPair = MediaCodecCompat.findDecoder(inputFormat);
         final MediaCodec                    decoder     = decoderPair.getFirst();
-        decoder.configure(decoderPair.getSecond(), surface, null, 0);
+        final MediaFormat                   decoderFormat = decoderPair.getSecond();
+        boolean requestTonemapping = Build.VERSION.SDK_INT >= 31 && isHdr(decoderFormat);
+        if (requestTonemapping) {
+            decoderFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO);
+        }
+        decoder.configure(decoderFormat, surface, null, 0);
+        if (requestTonemapping && !isTonemapEnabled(decoderFormat)) {
+            Log.d(TAG, "HDR tone-mapping requested but not supported by the decoder.");
+        }
         decoder.start();
         return decoder;
     }
@@ -511,12 +517,8 @@ final class VideoTrackConverter {
             final @NonNull MediaCodecInfo codecInfo,
             final @NonNull MediaFormat format,
             final @NonNull AtomicReference<Surface> surfaceReference) throws IOException {
-        boolean tonemapRequested = isTonemapEnabled(format);
         final MediaCodec encoder = MediaCodec.createByCodecName(codecInfo.getName());
         encoder.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE);
-        if (tonemapRequested && !isTonemapEnabled(format)) {
-            Log.d(TAG, "HDR tone-mapping requested but not supported by the decoder.");
-        }
         // Must be called before start()
         surfaceReference.set(encoder.createInputSurface());
         encoder.start();
